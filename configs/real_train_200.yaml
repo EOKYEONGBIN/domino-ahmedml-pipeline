@@ -1,0 +1,273 @@
+# Real (50-case) AhmedML training config for the A6000 workstation. Forked
+# from smoke_test.yaml rather than editing it in place, so the smoke-test run
+# stays reproducible/comparable. Paths point at the A6000's own filesystem
+# (no WSL2 /mnt/c prefix) and the 40/6/4 train/val/test split created by a
+# seeded (seed=42) random shuffle of all 50 runs -- see manifests/*.txt for
+# the exact case lists.
+#
+# model.*/train.* point-sampling and epoch values are now the official
+# DoMINO defaults (upgraded from smoke_test.yaml's shrunk values), given the
+# A6000's 48GB VRAM vs. the smoke test's 12GB laptop GPU.
+#
+# global_parameters.inlet_velocity/air_density were corrected from a
+# DrivAerML-default placeholder (30.0, 1.205) to AhmedML's actual simulation
+# convention (1.0, 1.0), confirmed against the paper (arXiv:2407.20801) --
+# see the comments in the variables: section below. This changes the
+# per-case field normalization done at preprocessing time, so train/val .npy
+# files and scaling_factors.pkl generated under the old placeholder are
+# stale and must be regenerated.
+
+project:
+  name: AhmedML_Full200
+
+exp_tag: 1
+project_dir: outputs/${project.name}/
+output: outputs/${project.name}/${exp_tag}
+
+hydra:
+  run:
+    dir: ${output}
+  output_subdir: hydra
+
+resume_dir: ${output}/models
+
+# ┌───────────────────────────────────────────┐
+# │            Data Preprocessing             │
+# └───────────────────────────────────────────┘
+data_processor:
+  kind: ahmedml
+  # data/raw_train and data/raw_val each contain symlinks to the real run_N
+  # dirs under data/CAE_Examples_AhmedML, one per case in that split (40 and
+  # 6 respectively -- see manifests/train.txt, manifests/validation.txt).
+  input_dir: /home/YOUR_USER/domino-ahmedml/data/raw_train
+  output_dir: /home/YOUR_USER/domino-ahmedml/data/processed/train
+  cached_dir: /home/YOUR_USER/domino-ahmedml/data/cached
+  use_cache: false
+  num_processors: 16  # A6000 machine has 32 cores; leave half free
+
+# ┌───────────────────────────────────────────┐
+# │            Solution variables             │
+# └───────────────────────────────────────────┘
+# Unchanged from smoke_test.yaml -- see that file's comment for how these
+# were confirmed against the raw vtp/vtu fields.
+variables:
+  surface:
+    solution:
+      pMean: scalar
+      wallShearStressMean: vector
+  volume:
+    solution:
+      UMean: vector
+      pMean: scalar
+      nutMean: scalar
+  global_parameters:
+    inlet_velocity:
+      type: vector
+      # RESOLVED -- confirmed directly from the AhmedML paper (arXiv:2407.20801,
+      # "Boundary conditions" / "Test-Case Description"): "the free-stream
+      # velocity U_inf = 1 m/s", Re = 7.68e5 based on body height H=0.288m,
+      # kinematic viscosity nu=3.75e-7 m^2/s (7.68e5 = 1*0.288/3.75e-7, checks
+      # out). OpenFOAM was run in a non-dimensional unit-velocity convention,
+      # NOT a real 30 m/s road speed -- this also explains why the raw
+      # UMean/pMean values in scaling_factors_summary.txt came out tiny
+      # (O(0.01-0.05)): they're already scaled relative to U=1, and dividing
+      # them by the old placeholder of 30 again was actively wrong.
+      reference: [1.0]
+    air_density:
+      type: scalar
+      # Paper doesn't give an explicit rho, but density=1 is the standard
+      # counterpart to this OpenFOAM non-dimensional convention (kinematic
+      # pressure p/rho is what's actually solved for) -- consistent with the
+      # observed tiny pMean magnitudes above.
+      reference: 1.0
+
+# ┌───────────────────────────────────────────┐
+# │         Data Configs                      │
+# └───────────────────────────────────────────┘
+data:
+  input_dir: /home/YOUR_USER/domino-ahmedml/data/processed/train
+  input_dir_val: /home/YOUR_USER/domino-ahmedml/data/processed/val
+  # Measured via compute_statistics.py against the real 40-case training
+  # split (surface_mesh_centers/volume_mesh_centers min/max, see
+  # outputs/AhmedML_Full50/scaling_factors/scaling_factors_summary.txt on the
+  # A6000), padded ~15%.
+  bounding_box_surface:
+    min: [-1.38, -0.32, 0.0]
+    max: [0.18, 0.32, 0.41]
+  # Real volume domain extent came back as the same fixed CFD computational
+  # box already assumed in smoke_test.yaml ([-4,-1,~0] to [6,1,1.4], padded
+  # here) -- confirmed this is the simulation domain boundary, not the car
+  # shape, so it doesn't vary per case. No change needed from smoke_test.yaml.
+  bounding_box:
+    min: [-4.5, -1.2, -0.1]
+    max: [6.5, 1.2, 1.6]
+  gpu_preprocessing: true
+  gpu_output: true
+  normalize_coordinates: true
+  sample_in_bbox: true
+  sampling: true
+  scaling_factors: ${project_dir}/scaling_factors/scaling_factors.pkl
+  volume_sample_from_disk: false
+  max_samples_for_statistics: 160  # 160 train cases (40 original + 120 new)
+
+domain_parallelism:
+  domain_size: 1
+  shard_grid: false
+  shard_points: false
+
+# ┌───────────────────────────────────────────┐
+# │          Model Parameters                 │
+# └───────────────────────────────────────────┘
+# Upgraded to NVIDIA's own official DoMINO defaults (from
+# physicsnemo/examples/cfd/external_aerodynamics/domino/src/conf/config.yaml
+# on the A6000), which were tuned on an H100 80GB against DrivAerML --
+# AhmedML's geometry/meshes are smaller, so the A6000's 48GB should handle
+# these comfortably too. No longer smoke-test-sized.
+model:
+  model_type: combined
+  activation: "gelu"
+  loss_function:
+    loss_type: "mse"
+    area_weighing_factor: 10000
+    pressure_magnitude_weight: 5.0  # extra weight on high-|pressure| (stagnation-point) targets, added to counteract MSE systematically under-predicting them (see AhmedML_Full50 vs ground-truth comparison)
+  interp_res: [128, 64, 64]
+  use_sdf_in_basis_func: true
+  volume_points_sample: 8192   # official default (was 2048 for the smoke test)
+  surface_points_sample: 8192  # official default (was 2048 for the smoke test)
+  surface_sampling_algorithm: area_weighted
+  # NOT the official 300_000 default -- confirmed by directly checking (pyvista
+  # n_points) every training/val STL: AhmedML's surface mesh only has
+  # 73,372-137,948 vertices per case (far coarser than DrivAerML, which the
+  # official default was tuned for). 300_000 crashed real training instantly
+  # with "Surface mesh has fewer points than requested sample size". Set below
+  # the smallest case (73,372) with margin.
+  geom_points_sample: 65_000
+  num_neighbors_surface: 7
+  num_neighbors_volume: 10
+  combine_volume_surface: false
+  return_volume_neighbors: false
+  use_surface_normals: true
+  use_surface_area: true
+  integral_loss_scaling_factor: 100
+  normalization: min_max_scaling
+  encode_parameters: false
+  surf_loss_scaling: 5.0
+  vol_loss_scaling: 1.0
+  geometry_encoding_type: both
+  solution_calculation_mode: two-loop
+  geometry_rep:
+    geo_conv:
+      base_neurons: 32
+      base_neurons_in: 1
+      base_neurons_out: 1
+      volume_radii: [0.1, 0.5, 1.0, 2.5]
+      surface_radii: [0.01, 0.05, 1.0]
+      surface_hops: 1
+      volume_hops: 1
+      volume_neighbors_in_radius: [32, 64, 128, 256]
+      surface_neighbors_in_radius: [8, 16, 128]
+      fourier_features: false
+      num_modes: 5
+      activation: ${model.activation}
+    geo_processor:
+      base_filters: 8
+      activation: ${model.activation}
+      processor_type: conv
+      self_attention: false
+      cross_attention: false
+      surface_sdf_scaling_factor: [0.01, 0.02, 0.04]
+      volume_sdf_scaling_factor: [0.04]
+  nn_basis_functions:
+    base_layer: 512
+    fourier_features: true
+    num_modes: 5
+    activation: ${model.activation}
+  local_point_conv:
+    activation: ${model.activation}
+  aggregation_model:
+    base_layer: 512
+    activation: ${model.activation}
+  position_encoder:
+    base_neurons: 512
+    activation: ${model.activation}
+    fourier_features: true
+    num_modes: 5
+  geometry_local:
+    volume_neighbors_in_radius: [64, 128]
+    surface_neighbors_in_radius: [32, 128]
+    volume_radii: [0.1, 0.25]
+    surface_radii: [0.05, 0.25]
+    base_layer: 512
+  parameter_model:
+    base_layer: 512
+    fourier_features: false
+    num_modes: 5
+    activation: ${model.activation}
+
+# ┌───────────────────────────────────────────┐
+# │          Training Configs                 │
+# └───────────────────────────────────────────┘
+# Upgraded to the official DoMINO default epoch count/schedule (was 10
+# epochs for the smoke test). checkpoint_interval stays at 2, so this can be
+# monitored and stopped early against an intermediate checkpoint if 1000
+# epochs turns out to take too long once real per-epoch timing is known.
+train:
+  epochs: 1000
+  checkpoint_interval: 2
+  dataloader:
+    batch_size: 1
+    preload_depth: 1
+    pin_memory: true
+  sampler:
+    shuffle: true
+    drop_last: false
+  checkpoint_dir: /user/models/
+  add_physics_loss: false
+  lr_scheduler:
+    name: MultiStepLR
+    milestones: [50, 200, 400, 500, 600, 700, 800, 900]  # official default (was [5,8] for 10-epoch smoke test)
+    gamma: 0.5
+    T_max: ${train.epochs}
+    eta_min: 1e-6
+  optimizer:
+    name: Adam
+    lr: 0.001
+    weight_decay: 0.0
+  # Disabled after a real training run (this config) hit permanent NaN in the
+  # surface loss at epoch 26 -- vol loss stayed finite throughout, only
+  # surf/surf_area/integral went NaN and never recovered, a classic fp16
+  # overflow signature. GradScaler is supposed to skip optimizer steps on
+  # inf/nan gradients, but this pointed to an overflow inside the forward
+  # loss computation itself (loss_fn_area's area*area_scaling_factor term),
+  # which isn't gradient-scaler-guarded. A6000 has enough VRAM headroom
+  # (was only 25.7/49GB used) to just train in fp32 instead of chasing the
+  # exact fp16 edge case.
+  amp:
+    enabled: false
+    autocast:
+      dtype: torch.float16
+    scaler:
+      _target_: torch.amp.GradScaler
+      enabled: ${..enabled}
+    clip_grad: true
+    grad_max_norm: 2.0
+
+val:
+  dataloader:
+    batch_size: 1
+    preload_depth: 1
+    pin_memory: true
+  sampler:
+    shuffle: true
+    drop_last: false
+
+# ┌───────────────────────────────────────────┐
+# │          Testing data Configs             │
+# └───────────────────────────────────────────┘
+eval:
+  test_path: /home/YOUR_USER/domino-ahmedml/data/raw_test
+  save_path: /home/YOUR_USER/domino-ahmedml/predictions
+  checkpoint_name: DoMINO.0.9.mdlus
+  scaling_param_path: /home/YOUR_USER/domino-ahmedml/outputs/AhmedML_Full50
+  refine_stl: False
+  num_points: 50_000

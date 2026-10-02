@@ -1,0 +1,22 @@
+This repository contains files adapted from NVIDIA PhysicsNeMo
+(https://github.com/NVIDIA/physicsnemo), licensed under the Apache License,
+Version 2.0. See LICENSE for the full license text.
+
+Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Adapted files (each file's own header has the full detail):
+
+- scripts/process_data.py — adapted from
+  examples/cfd/external_aerodynamics/domino_nim_finetuning/src/process_data.py.
+  Reads config from this project's own configs/ layout, and explicitly wires
+  cfg.variables.global_parameters through (the original silently relied on
+  DrivAerML-specific defaults that would have been wrong for AhmedML).
+
+- scripts/openfoam_datapipe.py — adapted from the same example's
+  openfoam_datapipe.py. Only change: added an "ahmedml" dataset kind pointing
+  at the AhmedML dataset's raw file layout. The output schema is otherwise
+  unmodified official code.
+
+All other files in this repository (configs/, manifests/, scripts/pipeline_500.sh,
+scripts/run_prediction.sh, scripts/batch_eval_10.py, scripts/batch_eval_50.sh) are
+original to this project, not derived from PhysicsNeMo.

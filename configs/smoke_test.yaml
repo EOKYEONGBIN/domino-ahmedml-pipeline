@@ -1,0 +1,260 @@
+# Based on the official classic-DoMINO example's config.yaml
+# (physicsnemo/examples/cfd/external_aerodynamics/domino/src/conf/config.yaml),
+# adapted for AhmedML. Only the values below were changed from the official
+# defaults; everything else (model architecture hyperparameters, etc.) is left
+# as NVIDIA's own DrivAerML-tuned defaults, which are a reasonable starting point
+# but NOT verified/tuned for AhmedML or for a 12GB laptop GPU -- see the
+# "SMOKE TEST" comments below for what was deliberately shrunk for a first run,
+# and TODO markers for values that still need to be confirmed (not guessed).
+
+project:
+  name: AhmedML_SmokeTest
+
+exp_tag: 1
+project_dir: outputs/${project.name}/
+output: outputs/${project.name}/${exp_tag}
+
+hydra:
+  run:
+    dir: ${output}
+  output_subdir: hydra
+
+resume_dir: ${output}/models
+
+# ┌───────────────────────────────────────────┐
+# │            Data Preprocessing             │
+# └───────────────────────────────────────────┘
+data_processor:
+  kind: ahmedml  # new kind added in scripts/openfoam_datapipe.py -> AhmedMLPaths
+  # data/raw_train and data/raw_val each contain ONE NTFS directory junction
+  # (run_1, run_2 respectively) pointing at the real files under
+  # C:\isaacsimProjects\CAE_Examples\AhmedML (no data duplicated). run_3 (test)
+  # is deliberately excluded from preprocessing -- classic domino's test.py reads
+  # test data directly from raw vtp/vtu/stl, it should NOT be converted to npy
+  # (see domino/README.md). process_data.py is run TWICE (see scripts/), once
+  # with these defaults (train), once with ++data_processor.input_dir/output_dir
+  # overridden to the *_val paths below (in comments, for reference):
+  #   ++data_processor.input_dir=/home/YOUR_USER/domino-ahmedml/data/raw_val
+  #   ++data_processor.output_dir=/home/YOUR_USER/domino-ahmedml/data/processed/val
+  input_dir: /home/YOUR_USER/domino-ahmedml/data/raw_train
+  output_dir: /home/YOUR_USER/domino-ahmedml/data/processed/train
+  cached_dir: /home/YOUR_USER/domino-ahmedml/data/cached
+  use_cache: false
+  num_processors: 4  # SMOKE TEST: laptop has 8 cores/16 threads; start low, not all cores
+
+# ┌───────────────────────────────────────────┐
+# │            Solution variables             │
+# └───────────────────────────────────────────┘
+# Field names confirmed by directly scanning boundary_1.vtp / volume_1.vtu --
+# see ../reports/dataset_report.md. Using the PHYSICAL fields (pMean,
+# wallShearStressMean, UMean, nutMean), matching the official example's own
+# convention (pMeanTrim/wallShearStressMeanTrim/UMeanTrim/...) -- NOT the
+# non-dimensional coefficient fields (static(p)_coeffMean etc.), which exist in
+# the same files but are a different quantity.
+variables:
+  surface:
+    solution:
+      pMean: scalar
+      wallShearStressMean: vector
+  volume:
+    solution:
+      UMean: vector
+      pMean: scalar
+      nutMean: scalar
+  global_parameters:
+    inlet_velocity:
+      type: vector
+      # TODO -- NOT VERIFIED. AhmedML's paper (arXiv:2407.20801) states
+      # Re ~ 7.68e5 but we have not confirmed the actual freestream velocity
+      # value used (and whether it's constant across all ~500 shape variants).
+      # Check force_mom_<i>.csv / geo_parameters_<i>.csv (not yet downloaded)
+      # or the paper's methods section before trusting this number.
+      reference: [30.00]  # PLACEHOLDER, copied from the official DrivAerML default
+    air_density:
+      type: scalar
+      reference: 1.205  # standard sea-level air density (fairly safe to reuse)
+
+# ┌───────────────────────────────────────────┐
+# │         Data Configs                      │
+# └───────────────────────────────────────────┘
+data:
+  # Populated by running scripts/process_data.py twice (train default config,
+  # val via ++data_processor.input_dir/output_dir override -- see comment above
+  # in data_processor). Split: manifests/train.txt=run_1, validation.txt=run_2,
+  # test.txt=run_3 (test stays raw, see eval.test_path below).
+  input_dir: /home/YOUR_USER/domino-ahmedml/data/processed/train
+  input_dir_val: /home/YOUR_USER/domino-ahmedml/data/processed/val
+  # Surface bounding box: measured directly from boundary_1.vtp's real extent
+  # (see dataset_report.md) -- min/max padded by ~15% since AhmedML has ~500
+  # differently-sized shape variants and run_1 alone isn't necessarily the
+  # largest. Re-check with compute_statistics.py once more runs are downloaded.
+  bounding_box_surface:
+    min: [-1.4, -0.25, 0.0]
+    max: [0.2, 0.25, 0.4]
+  # Volume (computational domain) bounding box: measured via the official
+  # compute_statistics.py against run_1+run_2's actual volume_mesh_centers
+  # (real min [-4.0,-1.0,~0.0], max [6.0,1.0,1.4] -- see
+  # outputs/AhmedML_SmokeTest/scaling_factors/scaling_factors_summary.txt),
+  # padded slightly. Only 2 samples so far -- re-check once more runs are added.
+  bounding_box:
+    min: [-4.5, -1.2, -0.1]
+    max: [6.5, 1.2, 1.6]
+  gpu_preprocessing: true
+  gpu_output: true
+  normalize_coordinates: true
+  sample_in_bbox: true
+  sampling: true
+  scaling_factors: ${project_dir}/scaling_factors/scaling_factors.pkl
+  # false: this feature ("Reduced Volume Reads" in domino/README.md) requires
+  # zarr-format data shuffled via physicsnemo-curator; we produce plain .npy via
+  # process_data.py, which does not support it (confirmed by an actual
+  # NotImplementedError when this was left at the official true default).
+  volume_sample_from_disk: false
+  max_samples_for_statistics: 20  # SMOKE TEST: official default is 200, we won't have that many runs yet
+
+domain_parallelism:
+  domain_size: 1
+  shard_grid: false
+  shard_points: false
+
+# ┌───────────────────────────────────────────┐
+# │          Model Parameters                 │
+# └───────────────────────────────────────────┘
+# Left mostly at official defaults (architecture hyperparameters). SMOKE TEST
+# changes are the point-sampling counts, shrunk from the official 8192/300_000
+# (tuned for H100 80GB) to fit comfortably on the laptop's 12GB RTX 5070 Ti for
+# a first pipeline-correctness run -- NOT tuned for accuracy. Increase these
+# once the pipeline is confirmed working and actual VRAM headroom is measured.
+model:
+  model_type: combined
+  activation: "gelu"
+  loss_function:
+    loss_type: "mse"
+    area_weighing_factor: 10000
+  interp_res: [128, 64, 64]
+  use_sdf_in_basis_func: true
+  volume_points_sample: 2048   # SMOKE TEST: official default 8192
+  surface_points_sample: 2048  # SMOKE TEST: official default 8192
+  surface_sampling_algorithm: area_weighted
+  geom_points_sample: 50_000   # SMOKE TEST: official default 300_000
+  num_neighbors_surface: 7
+  num_neighbors_volume: 10
+  combine_volume_surface: false
+  return_volume_neighbors: false
+  use_surface_normals: true
+  use_surface_area: true
+  integral_loss_scaling_factor: 100
+  normalization: min_max_scaling
+  encode_parameters: false
+  surf_loss_scaling: 5.0
+  vol_loss_scaling: 1.0
+  geometry_encoding_type: both
+  solution_calculation_mode: two-loop
+  geometry_rep:
+    geo_conv:
+      base_neurons: 32
+      base_neurons_in: 1
+      base_neurons_out: 1
+      volume_radii: [0.1, 0.5, 1.0, 2.5]
+      surface_radii: [0.01, 0.05, 1.0]
+      surface_hops: 1
+      volume_hops: 1
+      volume_neighbors_in_radius: [32, 64, 128, 256]
+      surface_neighbors_in_radius: [8, 16, 128]
+      fourier_features: false
+      num_modes: 5
+      activation: ${model.activation}
+    geo_processor:
+      base_filters: 8
+      activation: ${model.activation}
+      processor_type: conv
+      self_attention: false
+      cross_attention: false
+      surface_sdf_scaling_factor: [0.01, 0.02, 0.04]
+      volume_sdf_scaling_factor: [0.04]
+  nn_basis_functions:
+    base_layer: 512
+    fourier_features: true
+    num_modes: 5
+    activation: ${model.activation}
+  local_point_conv:
+    activation: ${model.activation}
+  aggregation_model:
+    base_layer: 512
+    activation: ${model.activation}
+  position_encoder:
+    base_neurons: 512
+    activation: ${model.activation}
+    fourier_features: true
+    num_modes: 5
+  geometry_local:
+    volume_neighbors_in_radius: [64, 128]
+    surface_neighbors_in_radius: [32, 128]
+    volume_radii: [0.1, 0.25]
+    surface_radii: [0.05, 0.25]
+    base_layer: 512
+  parameter_model:
+    base_layer: 512
+    fourier_features: false
+    num_modes: 5
+    activation: ${model.activation}
+
+# ┌───────────────────────────────────────────┐
+# │          Training Configs                 │
+# └───────────────────────────────────────────┘
+train:
+  epochs: 10  # SMOKE TEST: official default 1000 -- this is for pipeline correctness, not accuracy
+  checkpoint_interval: 2
+  dataloader:
+    batch_size: 1
+    preload_depth: 1
+    pin_memory: true
+  sampler:
+    shuffle: true
+    drop_last: false
+  checkpoint_dir: /user/models/
+  add_physics_loss: false
+  lr_scheduler:
+    name: MultiStepLR
+    milestones: [5, 8]  # SMOKE TEST: shrunk to fit inside 10 epochs
+    gamma: 0.5
+    T_max: ${train.epochs}
+    eta_min: 1e-6
+  optimizer:
+    name: Adam
+    lr: 0.001
+    weight_decay: 0.0
+  amp:
+    enabled: true
+    autocast:
+      dtype: torch.float16
+    scaler:
+      _target_: torch.amp.GradScaler
+      enabled: ${..enabled}
+    clip_grad: true
+    grad_max_norm: 2.0
+
+val:
+  dataloader:
+    batch_size: 1
+    preload_depth: 1
+    pin_memory: true
+  sampler:
+    shuffle: true
+    drop_last: false
+
+# ┌───────────────────────────────────────────┐
+# │          Testing data Configs             │
+# └───────────────────────────────────────────┘
+eval:
+  test_path: /home/YOUR_USER/domino-ahmedml/data/raw_test  # junction -> run_3, per manifests/test.txt
+  save_path: /home/YOUR_USER/domino-ahmedml/predictions
+  checkpoint_name: DoMINO.0.9.mdlus  # actual saved filename (physicsnemo Module format), confirmed via ls
+  scaling_param_path: /home/YOUR_USER/domino-ahmedml/outputs/AhmedML_SmokeTest
+  refine_stl: False
+  # Reduced further after test.py hung for 68 minutes with 0% GPU utilization
+  # (wchan: dxgvmb_send_sync_msg -- WSL2 GPU-driver-communication stall, not a
+  # slow-but-working computation) at 200_000. Not confirmed that num_points was
+  # the actual cause, but this is the one knob directly controlling per-batch
+  # GPU load for this step -- official default 1_240_000.
+  num_points: 50_000
