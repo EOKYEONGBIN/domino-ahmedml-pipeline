@@ -1,21 +1,15 @@
 #!/bin/bash
-# Unattended pipeline: download the remaining 300 AhmedML cases (random,
-# excluding the 200 already used), preprocess them alongside the existing
-# 160 train / 24 val (combined mode, so volume.vtu IS downloaded/processed
-# this time), then automatically launch COMBINED (surface+volume) training
-# on the resulting 400 train / 50 val dataset.
+# Unattended pipeline: download all 500 AhmedML cases (400 train / 50 val /
+# 50 test), preprocess train+val in combined mode (surface+volume, so
+# volume.vtu IS downloaded/processed), then automatically launch COMBINED
+# training on the resulting dataset.
 #
-# Forked from pipeline_200.sh (its download_case/symlink_case/process_split/
-# delete_raw_if_processed functions are unchanged, already proven correct)
-# with two additions per the user's explicit request before a multi-day
-# unattended absence (Chuseok holiday):
+# Two safety features, added after learning the hard way that a multi-day
+# unattended run can silently run out of disk or lose its best checkpoint:
 #   1. check_disk_space(): a fail-SAFE guard before each major phase (a
 #      batch download, compute_statistics, train.py) -- aborts with a clear
 #      log message if free space is below a safety floor, instead of
-#      plowing ahead and risking a mid-write crash like the original
-#      200-case run's disk-full crash (train.py's checkpoint retention is
-#      also now patched, which was the actual root cause of that crash, but
-#      this is defense in depth for the unattended download phase too).
+#      plowing ahead and risking a mid-write crash.
 #   2. A background disk-usage logger (30 min interval) for the training
 #      phase, so the log has a paper trail even though nothing should
 #      change disk usage much during training anymore.
@@ -38,8 +32,8 @@ BASE_URL="https://huggingface.co/datasets/neashton/ahmedml/resolve/main"
 # Safety floor: refuse to start a new batch/phase if free space would drop
 # below this. Measured peak need for one batch of 60 combined-mode cases
 # (raw, incl. volume.vtu, before delete_raw_if_processed reclaims it) is
-# ~342GB; current free space is ~623GB, so this floor is a generous margin
-# for the unexpected, not something we expect to actually hit.
+# ~342GB -- set this floor with that in mind, well below your actual free
+# space, as a generous margin for the unexpected.
 MIN_FREE_GB=100
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
@@ -149,7 +143,7 @@ download_test_cases() {
         else
             log "  Skipping run_$run_id (test) due to download failure."
         fi
-    done < "$MANIFEST_DIR/new2_test.txt"
+    done < "$MANIFEST_DIR/test_50.txt"
     log "=== Test case downloads complete. ==="
 }
 
@@ -162,10 +156,10 @@ disk_monitor() {
     done
 }
 
-log "=== Pipeline started (500-case combined expansion) ==="
+log "=== Pipeline started (500-case combined, full run) ==="
 
-run_batches train "$MANIFEST_DIR/new2_train.txt"
-run_batches val "$MANIFEST_DIR/new2_val.txt"
+run_batches train "$MANIFEST_DIR/train_400.txt"
+run_batches val "$MANIFEST_DIR/val_50.txt"
 
 download_test_cases &
 
