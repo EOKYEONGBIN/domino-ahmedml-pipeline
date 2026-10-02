@@ -22,7 +22,7 @@ DoMINO/AhmedML CFD 예측 파이프라인의 **설정 + 운영/자동화 스크�
 | `manifests/` | train/val/test에 어떤 케이스 ID가 들어가는지 정의한 목록 (40-case → 200-case → 500-case로 확장된 이력이 `new_*`/`new2_*` 파일명에 남아있음) | ✅ 실제 파일 포함 |
 | `scripts/` | 전처리(`process_data.py`), 다운로드+전처리+학습 자동화(`pipeline_500.sh`), 정확도 검증(`batch_eval_*`) | ✅ 실제 파일 포함 |
 | `data/` | AhmedML raw + 전처리된(.npy) 데이터 | 📁 빈 폴더 (527GB, 미포함 — `data/README.md` 참고) |
-| `model/` | 학습된 체크포인트(`.mdlus`) + 정규화 통계(`scaling_factors.pkl`) | 📁 빈 폴더 (재현 가능, 미포함 — `model/README.md` 참고) |
+| `model/` | 500-case combined 모델의 최종 체크포인트(`DoMINO.0.220.mdlus`) + 정규화 통계(`scaling_factors.pkl`) | ✅ 실제 파일 포함 (단, CC BY-SA 4.0 — `model/README.md` 참고) |
 | `audit/` | R²/MAE 등 정확도 검증 결과물 | 📁 빈 폴더 (실행 시 재생성됨 — `audit/README.md` 참고) |
 | `requests/` | Kit-CAE 추론 요청용 임시 작업 폴더 | 📁 빈 폴더 (순수 런타임 전용 — `requests/README.md` 참고) |
 
@@ -41,6 +41,8 @@ DoMINO/AhmedML CFD 예측 파이프라인의 **설정 + 운영/자동화 스크�
 
 ## 라이선스
 
-Apache License 2.0. `scripts/process_data.py`, `scripts/openfoam_datapipe.py`는 NVIDIA
-PhysicsNeMo 예제(`domino_nim_finetuning`)를 변형한 파일이며, 변경 내역은
-[`NOTICE`](./NOTICE)에 명시돼 있습니다. 나머지 파일은 이 프로젝트에서 직접 작성했습니다.
+- 코드(`scripts/`, `configs/`, `manifests/`): Apache License 2.0. `scripts/process_data.py`,
+  `scripts/openfoam_datapipe.py`는 NVIDIA PhysicsNeMo 예제(`domino_nim_finetuning`)를
+  변형한 파일이며, 변경 내역은 [`NOTICE`](./NOTICE)에 명시돼 있습니다.
+- **모델(`model/`): CC BY-SA 4.0** — AhmedML 데이터셋 자체의 라이선스를 따릅니다. 자세한
+  저작자 표시는 [`model/README.md`](./model/README.md) 참고.

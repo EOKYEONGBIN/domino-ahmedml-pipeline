@@ -1,13 +1,25 @@
 # model/
 
-학습이 끝난 뒤 배포하는 최종 산출물이 들어가는 자리입니다:
+학습이 끝난 뒤 배포하는 최종 산출물입니다:
 
-- `DoMINO.0.<epoch>.mdlus` — 가장 좋은 validation loss를 기록한 체크포인트
-- `scaling_factors.pkl` — 학습 때 계산한 정규화 통계 (추론 시 반드시 동일한 파일을 재사용해야 함)
+- `DoMINO.0.220.mdlus` — 500-case combined 모델의 best checkpoint (epoch 220, best val loss 0.00171)
+- `scaling_factors.pkl` — 학습 때 계산한 정규화 통계 (추론 시 반드시 이 파일을 그대로 재사용해야 함)
 
-**이 저장소에는 포함하지 않았습니다** — 체크포인트 자체는 용량(수십~수백 MB)과 재현성
-(학습을 다시 돌리면 또 생성 가능) 문제로 git에 올리는 대신, `../scripts`와 `../configs`의
-학습 설정으로 직접 재현하는 걸 전제로 합니다.
+## 라이선스 — 코드와 다릅니다
 
-실제 배포 모델은 [`domino-cfd-pipeline-guide`](https://github.com/EOKYEONGBIN/domino-cfd-pipeline-guide)
-저장소의 `train.py`를 이 폴더의 config로 돌려서 만듭니다.
+이 모델은 코드가 아니라 **AhmedML 데이터셋으로 학습한 결과물**입니다. AhmedML은
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) 라이선스라, 이 체크포인트도
+저장소 전체의 Apache 2.0이 아니라 **CC BY-SA 4.0**을 따릅니다:
+
+- **저작자 표시**: AhmedML 데이터셋 — N. Ashton, D. C. Maddix, S. Gundry, P. M. Shabestari,
+  "AhmedML: High-Fidelity Computational Fluid Dynamics Dataset for Incompressible,
+  Low-Speed Bluff Body Aerodynamics," arXiv:2407.20801, 2024.
+  ([caemldatasets.org/ahmedml](https://caemldatasets.org/ahmedml/))
+- **동일 라이선스 유지(ShareAlike)**: 이 체크포인트를 가져다 쓰거나 재배포할 때도 CC BY-SA 4.0을
+  유지해야 합니다.
+
+## 쓰는 법
+
+`../../domino-cfd-pipeline-guide`의 `predict_on_stl.py`와, 이 저장소의
+`../configs/real_train_500.yaml`을 함께 써야 합니다 — 모델 구조가 그 config와 정확히
+일치해야 체크포인트가 로드됩니다.
